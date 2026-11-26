@@ -1,7 +1,7 @@
 # Velqo Performance Tests (k6) — runs a k6 script and publishes the summary to Velqo.
 # One-time setup:
 #   1. Commit this to .github/workflows/velqo-perf-tests.yml
-#   2. Commit your k6 script at velqo/loadtest.js
+#   2. Commit your k6 script at Velqo.load.test.js
 #   3. Repo secrets: VELQO_INGEST_URL, VELQO_API_KEY, VELQO_API_TOKEN, VELQO_PROJECT_ID (optional).
 
 name: Velqo Performance Tests
@@ -15,18 +15,28 @@ on:
     # The one file this workflow runs. "velqo/**" also matched velqo/ui-tests/**, so committing a
     # UI spec fired the load test — same fault as the API workflow had.
     paths:
-      - "velqo/loadtest.js"
+      - "Velqo.load.test.js"
       - ".github/workflows/velqo-perf-tests.yml"
 
 jobs:
   perf-tests:
     runs-on: ubuntu-latest
+    env:
+      # The k6 script this workflow runs, as chosen in Velqo. Velqo rewrites this line when you
+      # pick another script; every step below reads it from here.
+      VELQO_SCRIPT: "Velqo.load.test.js"
     steps:
       - uses: actions/checkout@v4
       - uses: grafana/setup-k6-action@v1
       - name: Run k6
         continue-on-error: true
-        run: k6 run --summary-export=velqo-result.json velqo/loadtest.js
+        # The exit code is kept so a run that never produced a result can say why.
+        run: |
+          set +e
+          k6 run --summary-export=velqo-result.json "$VELQO_SCRIPT"
+          CODE=$?
+          echo "$CODE" > velqo-k6-exit
+          exit $CODE
 
       - name: Publish results to Velqo
         if: always()
@@ -40,14 +50,42 @@ jobs:
           PROJECT_ID="${{ github.event.inputs.velqo_project_id }}"
           if [ -z "$PROJECT_ID" ]; then PROJECT_ID="${{ secrets.VELQO_PROJECT_ID }}"; fi
           CI_RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          # The environment this run is recorded against: the optional repository variable
+          # VELQO_ENVIRONMENT (Settings > Secrets and variables > Actions > Variables), e.g. Staging.
+          # A run started from Velqo keeps the environment picked there.
+          if [ ! -s velqo-result.json ]; then
+            # No result: tell Velqo why, so the run ends now instead of waiting an hour as Queued.
+            if [ ! -f "$VELQO_SCRIPT" ]; then
+              REASON="$VELQO_SCRIPT is not in this repository, so k6 had nothing to run."
+            else
+              REASON="k6 could not run $VELQO_SCRIPT (exit $(cat velqo-k6-exit 2>/dev/null || echo unknown)). See the Run k6 step in GitHub Actions."
+            fi
+            jq -n \
+              --arg runId "$RUN_ID" --arg type "PERF" \
+              --arg commit "${{ github.sha }}" --arg branch "${{ github.ref_name }}" \
+              --arg ciRunUrl "$CI_RUN_URL" --arg error "$REASON" \
+              --arg environment "${{ vars.VELQO_ENVIRONMENT }}" \
+              --argjson projectId "${PROJECT_ID:-null}" \
+              '{runId:$runId, type:$type, commit:$commit, branch:$branch, ciRunUrl:$ciRunUrl, error:$error}
+                 + (if $projectId != null then {projectId:$projectId} else {} end)
+                 + (if $environment != "" then {environment:$environment} else {} end)' \
+              > velqo-payload.json
+            curl -sS --fail-with-body -X POST "$VELQO_INGEST_URL" \
+              -H "Authorization: Bearer $VELQO_API_TOKEN" -H "X-Api-Key: $VELQO_API_KEY" -H "Content-Type: application/json" \
+              --data @velqo-payload.json
+            echo "::error::$REASON"
+            exit 1
+          fi
           jq -n \
             --arg runId "$RUN_ID" --arg type "PERF" \
             --arg commit "${{ github.sha }}" --arg branch "${{ github.ref_name }}" \
             --arg ciRunUrl "$CI_RUN_URL" \
+            --arg environment "${{ vars.VELQO_ENVIRONMENT }}" \
             --argjson projectId "${PROJECT_ID:-null}" \
             --slurpfile result velqo-result.json \
             '{runId:$runId, type:$type, commit:$commit, branch:$branch, ciRunUrl:$ciRunUrl, result:$result[0]}
-               + (if $projectId != null then {projectId:$projectId} else {} end)' \
+               + (if $projectId != null then {projectId:$projectId} else {} end)
+               + (if $environment != "" then {environment:$environment} else {} end)' \
             > velqo-payload.json
           curl -sS --fail-with-body -X POST "$VELQO_INGEST_URL" \
             -H "Authorization: Bearer $VELQO_API_TOKEN" -H "X-Api-Key: $VELQO_API_KEY" -H "Content-Type: application/json" \
