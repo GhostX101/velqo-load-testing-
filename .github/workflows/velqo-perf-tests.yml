@@ -1,7 +1,7 @@
 # Velqo Performance Tests (k6) — runs a k6 script and publishes the summary to Velqo.
 # One-time setup:
 #   1. Commit this to .github/workflows/velqo-perf-tests.yml
-#   2. Commit your k6 script at Velqo.load.test.js
+#   2. Commit your k6 script at Velqo-test.js
 #   3. Repo secrets: VELQO_INGEST_URL, VELQO_API_KEY, VELQO_API_TOKEN, VELQO_PROJECT_ID (optional).
 
 name: Velqo Performance Tests
@@ -15,7 +15,7 @@ on:
     # The one file this workflow runs. "velqo/**" also matched velqo/ui-tests/**, so committing a
     # UI spec fired the load test — same fault as the API workflow had.
     paths:
-      - "Velqo.load.test.js"
+      - "Velqo-test.js"
       - ".github/workflows/velqo-perf-tests.yml"
 
 jobs:
@@ -24,7 +24,7 @@ jobs:
     env:
       # The k6 script this workflow runs, as chosen in Velqo. Velqo rewrites this line when you
       # pick another script; every step below reads it from here.
-      VELQO_SCRIPT: "Velqo.load.test.js"
+      VELQO_SCRIPT: "Velqo-test.js"
     steps:
       - uses: actions/checkout@v4
       - uses: grafana/setup-k6-action@v1
